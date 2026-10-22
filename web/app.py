@@ -21,7 +21,6 @@ from flask import (
 )
 
 # --- Configuration ------------------------------------------------------------
-# All configuration comes from the environment (set in docker-compose.yml).
 DB_HOST = os.environ.get("DB_HOST", "db")
 DB_NAME = os.environ.get("DB_NAME", "notesapp")
 DB_USER = os.environ.get("DB_USER", "notesapp")
@@ -31,6 +30,16 @@ SECRET_KEY = os.environ.get("SECRET_KEY", "dev-session-key")
 
 app = Flask(__name__)
 app.secret_key = SECRET_KEY
+
+
+# --- HMAC Helper --------------------------------------------------------------
+def calculate_csv_hmac(csv_content_str: str) -> str:
+    """Computes the HMAC-SHA256 digest for the given CSV string content using SECRET_KEY."""
+    key_bytes = SECRET_KEY.encode("utf-8")
+    content_bytes = csv_content_str.encode("utf-8")
+    hmac_obj = hmac.new(key_bytes, content_bytes, hashlib.sha256)
+    return hmac_obj.hexdigest()
+
 
 LOG_FILE = os.environ.get("NOTESAPP_LOG", "/var/log/notesapp/app.log")
 
@@ -74,11 +83,7 @@ def make_jwt(payload: dict) -> str:
 
 
 def verify_jwt(token: str):
-    """Decode a JWT. Accepts alg:none (no signature) and HS256 with a short key.
-
-    This is intentionally broken (flaw #4): an attacker can forge any identity
-    by setting "alg":"none", and the HS256 key is trivially guessable.
-    """
+    """Decode a JWT. Accepts alg:none (no signature) and HS256 with a short key."""
     try:
         h_b64, p_b64, sig_b64 = token.split(".")
     except ValueError:
@@ -91,7 +96,6 @@ def verify_jwt(token: str):
 
     alg = header.get("alg", "").lower()
     if alg == "none":
-        # No signature verification at all.
         return payload
     if alg == "hs256":
         signing_input = f"{h_b64}.{p_b64}".encode()
@@ -144,7 +148,6 @@ def login():
     if request.method == "POST":
         username = request.form.get("username", "")
         password = request.form.get("password", "")
-        # Flaw #8: SQL injection. Query built by string concatenation, no params.
         query = (
             "SELECT id, username, role FROM users "
             "WHERE username = '" + username + "' AND password = '" + password + "'"
@@ -155,7 +158,6 @@ def login():
             cur.execute(query)
             row = cur.fetchone()
         except Exception as e:
-            # Keep the raw error visible - helps the SQLi session.
             error = f"Query error: {e}"
             row = None
         conn.close()
@@ -163,7 +165,6 @@ def login():
             session["user_id"] = row["id"]
             session["username"] = row["username"]
             session["role"] = row["role"]
-            # Issue a weak JWT the dashboard uses to call the API.
             session["token"] = make_jwt({
                 "user_id": row["id"], "username": row["username"], "role": row["role"],
             })
@@ -205,8 +206,6 @@ def api_notes(note_id):
         return jsonify({"error": "unauthorized"}), 401
     conn = get_db()
     cur = conn.cursor()
-    # Flaw #7 (IDOR): the owner of the note is never checked. Any authenticated
-    # caller can read any note id. Flaw #4: `ident` may come from a forged token.
     cur.execute(
         "SELECT n.id, n.student_id, n.class_id, n.grade, n.comment, "
         "u.username AS student, c.name AS class_name "
@@ -228,7 +227,6 @@ def teacher():
         return redirect(url_for("login"))
     conn = get_db()
     cur = conn.cursor()
-    # A teacher sees every class (no owner scoping - broken access control).
     cur.execute("SELECT id, name, teacher_id FROM classes ORDER BY name")
     classes = cur.fetchall()
     cur.execute(
@@ -246,7 +244,6 @@ def teacher():
 
 @app.route("/grades", methods=["POST"])
 def grades():
-    # Flaw #11: no CSRF token checked on this state-changing POST.
     if not login_required("teacher"):
         return redirect(url_for("login"))
     note_id = request.form.get("note_id", "").strip()
@@ -276,6 +273,7 @@ def grades():
 def export_csv():
     if not login_required("teacher"):
         return redirect(url_for("login"))
+    
     class_id = request.args.get("class_id")
     conn = get_db()
     cur = conn.cursor()
@@ -295,15 +293,64 @@ def export_csv():
         )
     rows = cur.fetchall()
     conn.close()
+
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(["student", "class", "grade", "comment"])
     for r in rows:
         writer.writerow([r["student"], r["class"], r["grade"], r["comment"]])
+    
+    # 1. Retrieve the plain CSV content
+    raw_csv = buf.getvalue()
+    
+    # 2. Generate HMAC signature for the plain CSV content
+    mac = calculate_csv_hmac(raw_csv)
+    
+    # 3. Append the HMAC comment line at the end of the file
+    final_csv = raw_csv + f"# HMAC: {mac}\n"
+    
     return Response(
-        buf.getvalue(), mimetype="text/csv",
+        final_csv,
+        mimetype="text/csv",
         headers={"Content-Disposition": "attachment; filename=grades.csv"},
     )
+
+
+@app.route("/verify_csv", methods=["POST"])
+def verify_csv():
+    if not login_required("teacher"):
+        return jsonify({"status": "FAILED", "message": "Unauthorized"}), 401
+
+    file = request.files.get("file")
+    if not file:
+        return jsonify({"status": "FAILED", "message": "No file provided"}), 400
+
+    content = file.read().decode('utf-8', errors='ignore')
+    lines = content.splitlines(keepends=True)
+
+    hmac_line = None
+    data_lines = []
+    
+    # Separate CSV data content from the HMAC header line
+    for line in lines:
+        if line.startswith("# HMAC:"):
+            hmac_line = line.strip()
+        else:
+            data_lines.append(line)
+
+    if not hmac_line:
+        return jsonify({"status": "FAILED", "message": "No HMAC header found in file"}), 400
+
+    # Extract original HMAC and reconstruct the original CSV string
+    file_hmac = hmac_line.replace("# HMAC:", "").strip()
+    reconstructed_csv = "".join(data_lines)
+    computed_hmac = calculate_csv_hmac(reconstructed_csv)
+
+    # Compare signatures in constant time
+    if hmac.compare_digest(file_hmac, computed_hmac):
+        return jsonify({"status": "SUCCESS", "message": "HMAC Verification Passed! File is intact."})
+    else:
+        return jsonify({"status": "FAILED", "message": "CHECK FAILED: File has been tampered with!"}), 400
 
 
 @app.route("/admin")
@@ -323,11 +370,9 @@ def admin():
 
 @app.route("/admin/ping", methods=["POST"])
 def admin_ping():
-    # Flaw #11: no CSRF token. Flaw #9: command injection via os/system shell.
     if not login_required("admin"):
         return redirect(url_for("login"))
     host = request.form.get("host", "")
-    # Host is concatenated straight into a shell command.
     cmd = "ping -c 1 " + host
     try:
         result = subprocess.run(
@@ -390,5 +435,4 @@ def healthz():
 
 
 if __name__ == "__main__":
-    # Plain HTTP on purpose (flaw #3). Nginx + TLS is added in a later lab.
     app.run(host="0.0.0.0", port=5000, debug=True)
