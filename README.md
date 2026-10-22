@@ -1,3 +1,9 @@
+# Personal information
+
+name:CHEN YUCHEN
+english name:ENZO
+student_id:2023905940
+
 # NotesApp
 
 A small grades application used throughout the Computer Security course. Teachers
