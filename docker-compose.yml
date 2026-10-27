@@ -15,7 +15,6 @@ services:
       interval: 3s
       timeout: 3s
       retries: 20
-
   web:
     build: ./web
     environment:
@@ -25,16 +24,15 @@ services:
       POSTGRES_PASSWORD: notesapp_pg_pw_2024
       JWT_SECRET: s3cr3t
       SECRET_KEY: dev-session-key
+      EXPORT_HMAC_KEY_B64: ${EXPORT_HMAC_KEY_B64:?Run python3 scripts/setup_secrets.py first}
+      COMMENT_KEY_B64: ${COMMENT_KEY_B64:?Run python3 scripts/setup_secrets.py first}
     ports:
       - "8080:5000"
     depends_on:
       db:
         condition: service_healthy
-    # Flaw #13: the container runs as root (see Dockerfile) and mounts more than it
-    # needs - the host Docker socket and the whole project tree are exposed to it.
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - .:/host
-
 volumes:
   pgdata:
