@@ -15,6 +15,7 @@ services:
       interval: 3s
       timeout: 3s
       retries: 20
+  # ✅ 修改后：直接删除 JWT_SECRET 行，让 app.py 自动生成 32 字节高强度随机密钥
   web:
     build: ./web
     environment:
@@ -22,7 +23,6 @@ services:
       DB_NAME: notesapp
       DB_USER: notesapp
       POSTGRES_PASSWORD: notesapp_pg_pw_2024
-      JWT_SECRET: s3cr3t
       SECRET_KEY: dev-session-key
       EXPORT_HMAC_KEY_B64: ${EXPORT_HMAC_KEY_B64:?Run python3 scripts/setup_secrets.py first}
       COMMENT_KEY_B64: ${COMMENT_KEY_B64:?Run python3 scripts/setup_secrets.py first}

@@ -73,8 +73,8 @@ def verify_jwt(token: str):
     """
     安全验证 JWT 令牌：
     1. 严格检查结构（Header.Payload.Signature）
-    2. 拒绝任何非 HS256 的算法（特别是 alg: none）
-    3. 使用强密钥安全校验签名
+    2. 锁定算法为 HS256，彻底拒绝 alg: none 漏洞
+    3. 使用常数时间算法与强密钥验证签名
     """
     if not token or not isinstance(token, str):
         return None
@@ -93,17 +93,17 @@ def verify_jwt(token: str):
     except Exception:
         return None
 
-    # 1. 锁定算法为 HS256（彻底拒绝 'none' 或其他未定义算法）
+    # 1. 严格锁定算法为 HS256（拒绝 'none'、大小写变体或其他算法）
     alg = header.get("alg")
     if alg != "HS256":
         return None
 
-    # 2. 验证签名
+    # 2. 校验签名
     try:
         signing_input = f"{h_b64}.{p_b64}".encode('utf-8')
         expected_sig = _b64url(hmac.new(JWT_SECRET.encode('utf-8'), signing_input, hashlib.sha256).digest())
         
-        # 使用常数时间比较防范时序攻击
+        # 使用常数时间比较，防范时序攻击 (Timing Attack)
         if hmac.compare_digest(expected_sig, sig_b64):
             return payload
     except Exception:
