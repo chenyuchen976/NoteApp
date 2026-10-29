@@ -4,6 +4,7 @@ Do not deploy this anywhere real.
 """
 
 from export_integrity import verify_export
+import secrets
 import os
 import csv
 import io
@@ -27,8 +28,7 @@ from flask import (
 DB_HOST = os.environ.get("DB_HOST", "db")
 DB_NAME = os.environ.get("DB_NAME", "notesapp")
 DB_USER = os.environ.get("DB_USER", "notesapp")
-DB_PASSWORD = os.environ.get("POSTGRES_PASSWORD", "notesapp_pg_pw_2024")
-JWT_SECRET = os.environ.get("JWT_SECRET", "s3cr3t")
+JWT_SECRET = os.environ.get("JWT_SECRET") or secrets.token_hex(32)
 SECRET_KEY = os.environ.get("SECRET_KEY", "dev-session-key")
 
 app = Flask(__name__)
@@ -70,24 +70,45 @@ def make_jwt(payload: dict) -> str:
     return f"{h}.{p}.{_b64url(sig)}"
 
 def verify_jwt(token: str):
-    try:
-        h_b64, p_b64, sig_b64 = token.split(".")
-    except ValueError:
+    """
+    安全验证 JWT 令牌：
+    1. 严格检查结构（Header.Payload.Signature）
+    2. 拒绝任何非 HS256 的算法（特别是 alg: none）
+    3. 使用强密钥安全校验签名
+    """
+    if not token or not isinstance(token, str):
         return None
+
+    try:
+        parts = token.split(".")
+        if len(parts) != 3:
+            return None
+        h_b64, p_b64, sig_b64 = parts
+    except Exception:
+        return None
+
     try:
         header = json.loads(_b64url_decode(h_b64))
         payload = json.loads(_b64url_decode(p_b64))
     except Exception:
         return None
-    alg = header.get("alg", "").lower()
-    if alg == "none":
-        return payload
-    if alg == "hs256":
-        signing_input = f"{h_b64}.{p_b64}".encode()
-        expected = _b64url(hmac.new(JWT_SECRET.encode(), signing_input, hashlib.sha256).digest())
-        if hmac.compare_digest(expected, sig_b64):
-            return payload
+
+    # 1. 锁定算法为 HS256（彻底拒绝 'none' 或其他未定义算法）
+    alg = header.get("alg")
+    if alg != "HS256":
         return None
+
+    # 2. 验证签名
+    try:
+        signing_input = f"{h_b64}.{p_b64}".encode('utf-8')
+        expected_sig = _b64url(hmac.new(JWT_SECRET.encode('utf-8'), signing_input, hashlib.sha256).digest())
+        
+        # 使用常数时间比较防范时序攻击
+        if hmac.compare_digest(expected_sig, sig_b64):
+            return payload
+    except Exception:
+        return None
+
     return None
 
 def current_identity():
