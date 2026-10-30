@@ -28,6 +28,8 @@ from flask import (
 DB_HOST = os.environ.get("DB_HOST", "db")
 DB_NAME = os.environ.get("DB_NAME", "notesapp")
 DB_USER = os.environ.get("DB_USER", "notesapp")
+DB_PASSWORD = os.environ.get("POSTGRES_PASSWORD", "notesapp_pg_pw_2024")
+# web/app.py 顶部配置区域
 JWT_SECRET = os.environ.get("JWT_SECRET") or secrets.token_hex(32)
 SECRET_KEY = os.environ.get("SECRET_KEY", "dev-session-key")
 
@@ -63,22 +65,22 @@ def _b64url_decode(s: str) -> bytes:
 
 def make_jwt(payload: dict) -> str:
     header = {"alg": "HS256", "typ": "JWT"}
-    h = _b64url(json.dumps(header).encode())
-    p = _b64url(json.dumps(payload).encode())
+    # 指定 separators=(',', ':') 保证生成的 JSON 没有多余空格
+    h = _b64url(json.dumps(header, separators=(',', ':')).encode())
+    p = _b64url(json.dumps(payload, separators=(',', ':')).encode())
     signing_input = f"{h}.{p}".encode()
     sig = hmac.new(JWT_SECRET.encode(), signing_input, hashlib.sha256).digest()
     return f"{h}.{p}.{_b64url(sig)}"
 
 def verify_jwt(token: str):
     """
-    安全验证 JWT 令牌：
-    1. 严格检查结构（Header.Payload.Signature）
-    2. 锁定算法为 HS256，彻底拒绝 alg: none 漏洞
-    3. 使用常数时间算法与强密钥验证签名
+    验证 JWT 规则：
+    1. 结构必须为 Header.Payload.Signature
+    2. 强制使用 HS256 算法，拒绝 'none' 及其他任何算法
+    3. 签名比对使用 compare_digest 防止时序攻击
     """
     if not token or not isinstance(token, str):
         return None
-
     try:
         parts = token.split(".")
         if len(parts) != 3:
@@ -93,17 +95,17 @@ def verify_jwt(token: str):
     except Exception:
         return None
 
-    # 1. 严格锁定算法为 HS256（拒绝 'none'、大小写变体或其他算法）
-    alg = header.get("alg")
+    # Fix 1: 服务端决定算法，必须严格等于 "HS256"
+    alg = header.get("alg", "").strip() if isinstance(header.get("alg"), str) else ""
     if alg != "HS256":
         return None
 
-    # 2. 校验签名
+    # 验证 HMAC-SHA256 签名
     try:
         signing_input = f"{h_b64}.{p_b64}".encode('utf-8')
         expected_sig = _b64url(hmac.new(JWT_SECRET.encode('utf-8'), signing_input, hashlib.sha256).digest())
         
-        # 使用常数时间比较，防范时序攻击 (Timing Attack)
+        # 时序安全比较
         if hmac.compare_digest(expected_sig, sig_b64):
             return payload
     except Exception:
