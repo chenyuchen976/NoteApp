@@ -19,6 +19,7 @@ def main():
         f"# Generated secrets\n"
         f"COMMENT_KEY_B64={comment_key}\n"
         f"EXPORT_HMAC_KEY_B64={export_key}\n"
+        f"JWT_SECRET={jwt_secret}\n"
     )
 
     if ENV_FILE.exists():
