@@ -13,6 +13,7 @@ def gen_key_b64():
 def main():
     comment_key = gen_key_b64()
     export_key = gen_key_b64()
+    jwt_secret = secrets.token_hex(32)
 
     content = (
         f"# Generated secrets\n"

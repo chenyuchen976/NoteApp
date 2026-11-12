@@ -24,6 +24,7 @@ services:
       DB_USER: notesapp
       POSTGRES_PASSWORD: notesapp_pg_pw_2024
       SECRET_KEY: dev-session-key
+      JWT_SECRET: ${JWT_SECRET:?Run python3 scripts/setup_secrets.py first}
       EXPORT_HMAC_KEY_B64: ${EXPORT_HMAC_KEY_B64:?Run python3 scripts/setup_secrets.py first}
       COMMENT_KEY_B64: ${COMMENT_KEY_B64:?Run python3 scripts/setup_secrets.py first}
     ports:
