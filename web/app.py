@@ -29,7 +29,6 @@ DB_HOST = os.environ.get("DB_HOST", "db")
 DB_NAME = os.environ.get("DB_NAME", "notesapp")
 DB_USER = os.environ.get("DB_USER", "notesapp")
 DB_PASSWORD = os.environ.get("POSTGRES_PASSWORD", "notesapp_pg_pw_2024")
-# web/app.py 顶部配置区域
 JWT_SECRET = os.environ.get("JWT_SECRET") or secrets.token_hex(32)
 SECRET_KEY = os.environ.get("SECRET_KEY", "dev-session-key")
 
@@ -66,7 +65,6 @@ def _b64url_decode(s: str) -> bytes:
 
 def make_jwt(payload: dict) -> str:
     header = {"alg": "HS256", "typ": "JWT"}
-    # 指定 separators=(',', ':') 保证生成的 JSON 没有多余空格
     h = _b64url(json.dumps(header, separators=(',', ':')).encode())
     p = _b64url(json.dumps(payload, separators=(',', ':')).encode())
     signing_input = f"{h}.{p}".encode()
@@ -74,12 +72,6 @@ def make_jwt(payload: dict) -> str:
     return f"{h}.{p}.{_b64url(sig)}"
 
 def verify_jwt(token: str):
-    """
-    验证 JWT 规则：
-    1. 结构必须为 Header.Payload.Signature
-    2. 强制使用 HS256 算法，拒绝 'none' 及其他任何算法
-    3. 签名比对使用 compare_digest 防止时序攻击
-    """
     if not token or not isinstance(token, str):
         return None
     try:
@@ -96,17 +88,14 @@ def verify_jwt(token: str):
     except Exception:
         return None
 
-    # Fix 1: 服务端决定算法，必须严格等于 "HS256"
     alg = header.get("alg", "").strip() if isinstance(header.get("alg"), str) else ""
     if alg != "HS256":
         return None
 
-    # 验证 HMAC-SHA256 签名
     try:
         signing_input = f"{h_b64}.{p_b64}".encode('utf-8')
         expected_sig = _b64url(hmac.new(JWT_SECRET.encode('utf-8'), signing_input, hashlib.sha256).digest())
         
-        # 时序安全比较
         if hmac.compare_digest(expected_sig, sig_b64):
             return payload
     except Exception:
@@ -151,18 +140,21 @@ def login():
     if request.method == "POST":
         username = request.form.get("username", "")
         password = request.form.get("password", "")
+        
+        # [FIXED - Part 2]: 使用参数化查询（Parameterized Query）防止 SQL 注入
         query = (
             "SELECT id, username, role, password FROM users "
-            "WHERE username = '" + username + "'"
+            "WHERE username = %s"
         )
         conn = get_db()
         cur = conn.cursor()
         try:
-            cur.execute(query)
+            cur.execute(query, (username,))
             row = cur.fetchone()
         except Exception as e:
             error = f"Query error: {e}"
             row = None
+            
         authenticated = False
         try:
             if row:
@@ -231,7 +223,6 @@ def api_notes(note_id):
     if not note:
         return jsonify({"error": "not found"}), 404
     
-    # Flaw #7 fix: 仅允许笔记本人、教师或管理员查看
     if note["student_id"] != ident.get("user_id") and ident.get("role") not in ("teacher", "admin"):
         return jsonify({"error": "not found"}), 404
     
@@ -366,10 +357,11 @@ def admin_ping():
     if not login_required("admin"):
         return redirect(url_for("login"))
     host = request.form.get("host", "")
-    cmd = "ping -c 1 " + host
+    
+    # [FIXED - Part 3]: 移除 shell=True 并改用参数列表，彻底杜绝命令注入
     try:
         result = subprocess.run(
-            cmd, shell=True, capture_output=True, text=True, timeout=10,
+            ["ping", "-c", "1", host], shell=False, capture_output=True, text=True, timeout=10,
         )
         output = result.stdout + result.stderr
     except Exception as e:
